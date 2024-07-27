@@ -2,7 +2,6 @@ package main
 
 import (
     "bytes"
-    // "encoding/json"
     "fmt"
     "io"
     "mime/multipart"
@@ -42,6 +41,7 @@ type WhisperRequest struct {
 }
 
 func main() {
+    fmt.Println("Starting proxy update routine")
     go updateWorkingProxiesPeriodically()
     http.HandleFunc("/v1/chat/completions", chatCompletionsHandler)
     http.HandleFunc("/v1/audio/transcriptions", whisperHandler)
@@ -49,10 +49,12 @@ func main() {
     if port == "" {
         port = "8080"
     }
+    fmt.Printf("Server starting on port %s\n", port)
     http.ListenAndServe(":"+port, nil)
 }
 
 func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
+    fmt.Printf("Received chat completion request: %s %s\n", r.Method, r.URL.Path)
     if r.Method != http.MethodPost {
         http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
         return
@@ -60,9 +62,11 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 
     proxy := getWorkingProxy()
     if proxy == "" {
+        fmt.Println("No working proxies available")
         http.Error(w, "No working proxies available", http.StatusServiceUnavailable)
         return
     }
+    fmt.Printf("Using proxy: %s\n", proxy)
 
     proxyURL, _ := url.Parse(proxy)
     transport := &http.Transport{
@@ -71,6 +75,7 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
     client := &http.Client{Transport: transport}
 
     deepinfraURL := "https://api.deepinfra.com/v1/openai/chat/completions"
+    fmt.Printf("Sending request to Deepinfra API: %s\n", deepinfraURL)
     deepinfraReq, _ := http.NewRequest(r.Method, deepinfraURL, r.Body)
     deepinfraReq.Header = r.Header
     deepinfraReq.Header.Set("X-Deepinfra-Source", "web-page")
@@ -78,11 +83,14 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 
     resp, err := client.Do(deepinfraReq)
     if err != nil {
+        fmt.Printf("Failed to call Deepinfra API: %v\n", err)
         removeProxy(proxy)
         http.Error(w, "Failed to call Deepinfra API", http.StatusInternalServerError)
         return
     }
     defer resp.Body.Close()
+
+    fmt.Printf("Received response from Deepinfra API with status: %d\n", resp.StatusCode)
 
     for key, values := range resp.Header {
         for _, value := range values {
@@ -94,6 +102,7 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func whisperHandler(w http.ResponseWriter, r *http.Request) {
+    fmt.Printf("Received whisper request: %s %s\n", r.Method, r.URL.Path)
     if r.Method != http.MethodPost {
         http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
         return
@@ -101,12 +110,14 @@ func whisperHandler(w http.ResponseWriter, r *http.Request) {
 
     err := r.ParseMultipartForm(10 << 20)
     if err != nil {
+        fmt.Printf("Failed to parse form: %v\n", err)
         http.Error(w, "Failed to parse form", http.StatusBadRequest)
         return
     }
 
     file, _, err := r.FormFile("file")
     if err != nil {
+        fmt.Printf("Failed to get file from form: %v\n", err)
         http.Error(w, "Failed to get file from form", http.StatusBadRequest)
         return
     }
@@ -127,17 +138,22 @@ func whisperHandler(w http.ResponseWriter, r *http.Request) {
 
     proxy := getWorkingProxy()
     if proxy == "" {
+        fmt.Println("No working proxies available")
         http.Error(w, "No working proxies available", http.StatusServiceUnavailable)
         return
     }
+    fmt.Printf("Using proxy: %s\n", proxy)
 
     resp, err := sendWhisperRequest(whisperReq, proxy)
     if err != nil {
+        fmt.Printf("Failed to call Deepinfra Whisper API: %v\n", err)
         removeProxy(proxy)
         http.Error(w, "Failed to call Deepinfra Whisper API", http.StatusInternalServerError)
         return
     }
     defer resp.Body.Close()
+
+    fmt.Printf("Received response from Deepinfra Whisper API with status: %d\n", resp.StatusCode)
 
     for key, values := range resp.Header {
         for _, value := range values {
@@ -173,6 +189,7 @@ func sendWhisperRequest(req WhisperRequest, proxyStr string) (*http.Response, er
     writer.Close()
 
     deepinfraURL := "https://api.deepinfra.com/v1/inference/openai/whisper-large-v3"
+    fmt.Printf("Sending request to Deepinfra Whisper API: %s\n", deepinfraURL)
     httpReq, err := http.NewRequest("POST", deepinfraURL, body)
     if err != nil {
         return nil, err
@@ -187,6 +204,7 @@ func sendWhisperRequest(req WhisperRequest, proxyStr string) (*http.Response, er
 
 func updateWorkingProxiesPeriodically() {
     for {
+        fmt.Println("Updating working proxies")
         updateWorkingProxies()
         time.Sleep(15 * time.Minute)
     }
@@ -195,7 +213,7 @@ func updateWorkingProxiesPeriodically() {
 func updateWorkingProxies() {
     proxies, err := getProxyList()
     if err != nil {
-        fmt.Println("Failed to get proxy list:", err)
+        fmt.Printf("Failed to get proxy list: %v\n", err)
         return
     }
 
@@ -226,6 +244,8 @@ func updateWorkingProxies() {
     workingProxies = newProxies
     lastUpdate = time.Now()
     proxyMutex.Unlock()
+
+    fmt.Printf("Updated working proxies. Count: %d\n", len(newProxies))
 }
 
 func getWorkingProxy() string {
@@ -238,6 +258,7 @@ func getWorkingProxy() string {
     }
     proxyMutex.RUnlock()
 
+    fmt.Println("No working proxies, updating list")
     updateWorkingProxies()
 
     proxyMutex.RLock()
@@ -254,12 +275,14 @@ func removeProxy(proxy string) {
     for i, p := range workingProxies {
         if p == proxy {
             workingProxies = append(workingProxies[:i], workingProxies[i+1:]...)
+            fmt.Printf("Removed proxy: %s\n", proxy)
             break
         }
     }
 }
 
 func getProxyList() ([]string, error) {
+    fmt.Println("Fetching proxy list")
     resp, err := http.Get("https://api.proxyscrape.com/v3/free-proxy-list/get?request=displayproxies&protocol=http&proxy_format=protocolipport&format=text&anonymity=Elite,Anonymous&timeout=5015")
     if err != nil {
         return nil, fmt.Errorf("failed to get proxy list: %v", err)
@@ -271,7 +294,9 @@ func getProxyList() ([]string, error) {
         return nil, fmt.Errorf("failed to read proxy list: %v", err)
     }
 
-    return strings.Fields(string(body)), nil
+    proxies := strings.Fields(string(body))
+    fmt.Printf("Fetched %d proxies\n", len(proxies))
+    return proxies, nil
 }
 
 func checkProxy(proxy string) bool {
@@ -293,5 +318,9 @@ func checkProxy(proxy string) bool {
     }
     defer resp.Body.Close()
 
-    return resp.StatusCode == http.StatusOK
+    isWorking := resp.StatusCode == http.StatusOK
+    if isWorking {
+        fmt.Printf("Proxy working: %s\n", proxy)
+    }
+    return isWorking
 }
