@@ -110,6 +110,10 @@ func updateProxyList() error {
 
     proxyMutex.Lock()
     proxyList = strings.Split(strings.TrimSpace(string(body)), "\n")
+    // Очищаем каждый прокси от лишних символов
+    for i, proxy := range proxyList {
+        proxyList[i] = strings.TrimSpace(proxy)
+    }
     proxyMutex.Unlock()
 
     log.Printf("Updated proxy list with %d proxies", len(proxyList))
@@ -119,7 +123,7 @@ func updateProxyList() error {
 }
 
 func checkProxy(proxy string) bool {
-    proxyURL, err := url.Parse("http://" + proxy)
+    proxyURL, err := url.Parse(proxy)
     if err != nil {
         log.Printf("Failed to parse proxy URL %s: %v", proxy, err)
         return false
