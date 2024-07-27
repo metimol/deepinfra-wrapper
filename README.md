@@ -1,25 +1,6 @@
 # Proxy Checker API
 
-This service provides a fast API for checking and returning working proxies.
-
-## API Usage
-
-Send a POST request to `/check_proxies` with the following header:
-
-```
-Authorization: Bearer your_api_key
-```
-
-The API will return a JSON response with working proxies:
-
-```json
-{
-  "working_proxies": [
-    "123.45.67.89:8080",
-    "98.76.54.32:3128"
-  ]
-}
-```
+This service provides a fast API for using Deepinfra absolutely free.
 
 ## Deployment
 
