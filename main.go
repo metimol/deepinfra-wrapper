@@ -2,6 +2,7 @@ package main
 
 import (
     "bytes"
+    "encoding/json"
     "fmt"
     "io"
     "mime/multipart"
@@ -40,6 +41,14 @@ type WhisperRequest struct {
     Language string
 }
 
+type OpenAIError struct {
+    Error struct {
+        Message string `json:"message"`
+        Type    string `json:"type"`
+        Code    string `json:"code"`
+    } `json:"error"`
+}
+
 func main() {
     fmt.Println("Starting proxy update routine")
     go updateWorkingProxiesPeriodically()
@@ -60,45 +69,60 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
         return
     }
 
-    proxy := getWorkingProxy()
-    if proxy == "" {
-        fmt.Println("No working proxies available")
-        http.Error(w, "No working proxies available", http.StatusServiceUnavailable)
-        return
-    }
-    fmt.Printf("Using proxy: %s\n", proxy)
-
-    proxyURL, _ := url.Parse(proxy)
-    transport := &http.Transport{
-        Proxy: http.ProxyURL(proxyURL),
-    }
-    client := &http.Client{Transport: transport}
-
-    deepinfraURL := "https://api.deepinfra.com/v1/openai/chat/completions"
-    fmt.Printf("Sending request to Deepinfra API: %s\n", deepinfraURL)
-    deepinfraReq, _ := http.NewRequest(r.Method, deepinfraURL, r.Body)
-    deepinfraReq.Header = r.Header
-    deepinfraReq.Header.Set("X-Deepinfra-Source", "web-page")
-    deepinfraReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36")
-
-    resp, err := client.Do(deepinfraReq)
-    if err != nil {
-        fmt.Printf("Failed to call Deepinfra API: %v\n", err)
-        removeProxy(proxy)
-        http.Error(w, "Failed to call Deepinfra API", http.StatusInternalServerError)
-        return
-    }
-    defer resp.Body.Close()
-
-    fmt.Printf("Received response from Deepinfra API with status: %d\n", resp.StatusCode)
-
-    for key, values := range resp.Header {
-        for _, value := range values {
-            w.Header().Add(key, value)
+    for i := 0; i < 30; i++ {
+        proxy := getWorkingProxy()
+        if proxy == "" {
+            fmt.Println("No working proxies available")
+            continue
         }
+
+        proxyURL, _ := url.Parse(proxy)
+        transport := &http.Transport{
+            Proxy: http.ProxyURL(proxyURL),
+        }
+        client := &http.Client{Transport: transport}
+
+        deepinfraURL := "https://api.deepinfra.com/v1/openai/chat/completions"
+        fmt.Printf("Sending request to Deepinfra API: %s\n", deepinfraURL)
+        deepinfraReq, _ := http.NewRequest(r.Method, deepinfraURL, r.Body)
+        deepinfraReq.Header = r.Header
+        deepinfraReq.Header.Set("X-Deepinfra-Source", "web-page")
+        deepinfraReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36")
+
+        resp, err := client.Do(deepinfraReq)
+        if err != nil {
+            fmt.Printf("Failed to call Deepinfra API: %v\n", err)
+            removeProxy(proxy)
+            continue
+        }
+
+        fmt.Printf("Received response from Deepinfra API with status: %d\n", resp.StatusCode)
+
+        for key, values := range resp.Header {
+            for _, value := range values {
+                w.Header().Add(key, value)
+            }
+        }
+        w.WriteHeader(resp.StatusCode)
+        io.Copy(w, resp.Body)
+        resp.Body.Close()
+        return
     }
-    w.WriteHeader(resp.StatusCode)
-    io.Copy(w, resp.Body)
+
+    errorResponse := OpenAIError{
+        Error: struct {
+            Message string `json:"message"`
+            Type    string `json:"type"`
+            Code    string `json:"code"`
+        }{
+            Message: "Unable to process the request after multiple attempts",
+            Type:    "internal_error",
+            Code:    "internal_error",
+        },
+    }
+    w.Header().Set("Content-Type", "application/json")
+    w.WriteHeader(http.StatusInternalServerError)
+    json.NewEncoder(w).Encode(errorResponse)
 }
 
 func whisperHandler(w http.ResponseWriter, r *http.Request) {
@@ -136,32 +160,47 @@ func whisperHandler(w http.ResponseWriter, r *http.Request) {
         Language: language,
     }
 
-    proxy := getWorkingProxy()
-    if proxy == "" {
-        fmt.Println("No working proxies available")
-        http.Error(w, "No working proxies available", http.StatusServiceUnavailable)
-        return
-    }
-    fmt.Printf("Using proxy: %s\n", proxy)
-
-    resp, err := sendWhisperRequest(whisperReq, proxy)
-    if err != nil {
-        fmt.Printf("Failed to call Deepinfra Whisper API: %v\n", err)
-        removeProxy(proxy)
-        http.Error(w, "Failed to call Deepinfra Whisper API", http.StatusInternalServerError)
-        return
-    }
-    defer resp.Body.Close()
-
-    fmt.Printf("Received response from Deepinfra Whisper API with status: %d\n", resp.StatusCode)
-
-    for key, values := range resp.Header {
-        for _, value := range values {
-            w.Header().Add(key, value)
+    for i := 0; i < 30; i++ {
+        proxy := getWorkingProxy()
+        if proxy == "" {
+            fmt.Println("No working proxies available")
+            continue
         }
+
+        resp, err := sendWhisperRequest(whisperReq, proxy)
+        if err != nil {
+            fmt.Printf("Failed to call Deepinfra Whisper API: %v\n", err)
+            removeProxy(proxy)
+            continue
+        }
+
+        fmt.Printf("Received response from Deepinfra Whisper API with status: %d\n", resp.StatusCode)
+
+        for key, values := range resp.Header {
+            for _, value := range values {
+                w.Header().Add(key, value)
+            }
+        }
+        w.WriteHeader(resp.StatusCode)
+        io.Copy(w, resp.Body)
+        resp.Body.Close()
+        return
     }
-    w.WriteHeader(resp.StatusCode)
-    io.Copy(w, resp.Body)
+
+    errorResponse := OpenAIError{
+        Error: struct {
+            Message string `json:"message"`
+            Type    string `json:"type"`
+            Code    string `json:"code"`
+        }{
+            Message: "Unable to process the whisper request after multiple attempts",
+            Type:    "internal_error",
+            Code:    "internal_error",
+        },
+    }
+    w.Header().Set("Content-Type", "application/json")
+    w.WriteHeader(http.StatusInternalServerError)
+    json.NewEncoder(w).Encode(errorResponse)
 }
 
 func sendWhisperRequest(req WhisperRequest, proxyStr string) (*http.Response, error) {
@@ -245,7 +284,7 @@ func updateWorkingProxies() {
     lastUpdate = time.Now()
     proxyMutex.Unlock()
 
-    fmt.Printf("Updated working proxies. Count: %d\n", len(newProxies))
+    fmt.Printf("Working proxies: %d\n", len(newProxies))
 }
 
 func getWorkingProxy() string {
@@ -275,7 +314,6 @@ func removeProxy(proxy string) {
     for i, p := range workingProxies {
         if p == proxy {
             workingProxies = append(workingProxies[:i], workingProxies[i+1:]...)
-            fmt.Printf("Removed proxy: %s\n", proxy)
             break
         }
     }
@@ -295,7 +333,7 @@ func getProxyList() ([]string, error) {
     }
 
     proxies := strings.Fields(string(body))
-    fmt.Printf("Fetched %d proxies\n", len(proxies))
+    fmt.Printf("Fetched proxies: %d\n", len(proxies))
     return proxies, nil
 }
 
@@ -318,9 +356,5 @@ func checkProxy(proxy string) bool {
     }
     defer resp.Body.Close()
 
-    isWorking := resp.StatusCode == http.StatusOK
-    if isWorking {
-        fmt.Printf("Proxy working: %s\n", proxy)
-    }
-    return isWorking
+    return resp.StatusCode == http.StatusOK
 }
