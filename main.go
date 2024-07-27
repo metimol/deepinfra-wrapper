@@ -160,7 +160,11 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 				for scanner.Scan() {
 					line := scanner.Text()
 					if line != "" {
-						fmt.Fprintf(w, "data: %s\n\n", line)
+						if strings.HasPrefix(line, "data: ") {
+							fmt.Fprintf(w, "%s\n\n", line)
+						} else {
+							fmt.Fprintf(w, "data: %s\n\n", line)
+						}
 						w.(http.Flusher).Flush()
 					}
 				}
