@@ -30,8 +30,8 @@ type ChatCompletionRequest struct {
 }
 
 type ChatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role    string `json:"content"`
+	Content string `json:"role"`
 }
 
 type WhisperRequest struct {
@@ -49,8 +49,8 @@ type OpenAIError struct {
 }
 
 const (
-	baseURL      = "https://api.deepinfra.com/v1/openai/chat/completions"
-	whisperURL   = "https://api.deepinfra.com/v1/inference/openai/whisper-large-v3"
+	baseURL    = "https://api.deepinfra.com/v1/openai/chat/completions"
+	whisperURL = "https://api.deepinfra.com/v1/inference/openai/whisper-large-v3"
 )
 
 var SUPPORTED_MODELS = []string{
@@ -76,13 +76,12 @@ func main() {
 	if port == "" {
 		port = "8080"
 	}
-	fmt.Printf("┌───────────────────────────────────────────────┐\n")
-	fmt.Printf("│ Server starting on port %-24s │\n", port)
-	fmt.Printf("└───────────────────────────────────────────────┘\n")
+	fmt.Printf("🚀 Server starting on port %s\n", port)
 	http.ListenAndServe(":"+port, nil)
 }
 
 func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
+	fmt.Printf("📨 Received chat completion request: %s %s\n", r.Method, r.URL.Path)
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -96,8 +95,20 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !isModelSupported(chatReq.Model) {
-		errorMsg := fmt.Sprintf("Unsupported model: %s", chatReq.Model)
-		http.Error(w, errorMsg, http.StatusBadRequest)
+		errorResponse := OpenAIError{
+			Error: struct {
+				Message string `json:"message"`
+				Type    string `json:"type"`
+				Code    string `json:"code"`
+			}{
+				Message: "Unsupported model. Please use one of the supported models.",
+				Type:    "invalid_request_error",
+				Code:    "model_not_found",
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(errorResponse)
 		return
 	}
 
@@ -133,8 +144,7 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 		req, _ := http.NewRequest("POST", baseURL, bytes.NewBuffer(data))
 		req.Header = getHeaders()
 
-		fmt.Printf("→ Chat request to %s using proxy %s\n", baseURL, proxy)
-
+		fmt.Printf("🔗 Sending request to %s using proxy %s\n", baseURL, proxy)
 		resp, err := client.Do(req)
 		if err != nil {
 			removeProxy(proxy)
@@ -161,6 +171,7 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		removeProxy(proxy)
+		fmt.Printf("❌ Error response from Deepinfra API: %s\n", string(body))
 		time.Sleep(time.Second)
 	}
 
@@ -181,6 +192,7 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func whisperHandler(w http.ResponseWriter, r *http.Request) {
+	fmt.Printf("📨 Received whisper request: %s %s\n", r.Method, r.URL.Path)
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -219,8 +231,7 @@ func whisperHandler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		fmt.Printf("→ Whisper request to %s using proxy %s\n", whisperURL, proxy)
-
+		fmt.Printf("🔗 Sending whisper request to %s using proxy %s\n", whisperURL, proxy)
 		resp, err := sendWhisperRequest(whisperReq, proxy)
 		if err != nil {
 			removeProxy(proxy)
@@ -243,6 +254,7 @@ func whisperHandler(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		removeProxy(proxy)
+		fmt.Printf("❌ Error response from Deepinfra Whisper API: %s\n", string(body))
 		time.Sleep(time.Second)
 	}
 
@@ -340,9 +352,7 @@ func updateWorkingProxies() {
 	lastUpdate = time.Now()
 	proxyMutex.Unlock()
 
-	fmt.Printf("┌───────────────────────────────────────────────┐\n")
-	fmt.Printf("│ Working proxies found: %-24d │\n", len(newProxies))
-	fmt.Printf("└───────────────────────────────────────────────┘\n")
+	fmt.Printf("✅ Found %d working proxies\n", len(newProxies))
 }
 
 func getWorkingProxy() string {
@@ -419,4 +429,13 @@ func getHeaders() http.Header {
 	headers.Set("X-Deepinfra-Source", "web-page")
 	headers.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36")
 	return headers
+}
+
+func isModelSupported(model string) bool {
+	for _, supportedModel := range SUPPORTED_MODELS {
+		if model == supportedModel {
+			return true
+		}
+	}
+	return false
 }
