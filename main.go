@@ -5,6 +5,7 @@ import (
     "fmt"
     "io/ioutil"
     "net/http"
+    "net/url"
     "os"
     "strings"
     "sync"
@@ -105,10 +106,14 @@ func updateProxyList() error {
 }
 
 func checkProxy(proxy string) bool {
-    proxyURL := "http://" + proxy
+    proxyURL, err := url.Parse("http://" + proxy)
+    if err != nil {
+        return false
+    }
+
     client := &http.Client{
         Transport: &http.Transport{
-            Proxy: http.ProxyURL(func() *url.URL { u, _ := url.Parse(proxyURL); return u }()),
+            Proxy: http.ProxyURL(proxyURL),
         },
         Timeout: 2 * time.Second,
     }
