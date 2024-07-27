@@ -1,4 +1,4 @@
-# Proxy Checker API
+# Deepinfra Wrapper
 
 This service provides a fast API for using Deepinfra absolutely free.
 
