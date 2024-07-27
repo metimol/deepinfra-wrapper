@@ -14,7 +14,7 @@ import (
 
 var (
     workingProxies []string
-    proxyMutex     sync.Mutex
+    proxyMutex     sync.RWMutex
     lastUpdate     time.Time
 )
 
@@ -34,7 +34,7 @@ type ChatMessage struct {
 }
 
 func main() {
-    http.HandleFunc("/check_proxies", checkProxiesHandler)
+    go updateWorkingProxiesPeriodically()
     http.HandleFunc("/v1/chat/completions", chatCompletionsHandler)
     port := os.Getenv("PORT")
     if port == "" {
@@ -43,42 +43,9 @@ func main() {
     http.ListenAndServe(":"+port, nil)
 }
 
-func checkProxiesHandler(w http.ResponseWriter, r *http.Request) {
-    if r.Method != http.MethodPost {
-        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-        return
-    }
-
-    apiKey := os.Getenv("API_KEY")
-    if apiKey == "" {
-        http.Error(w, "API_KEY not set", http.StatusInternalServerError)
-        return
-    }
-
-    if r.Header.Get("Authorization") != "Bearer "+apiKey {
-        http.Error(w, "Unauthorized", http.StatusUnauthorized)
-        return
-    }
-
-    updateWorkingProxies()
-
-    json.NewEncoder(w).Encode(map[string][]string{"working_proxies": workingProxies})
-}
-
 func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
     if r.Method != http.MethodPost {
         http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-        return
-    }
-
-    var req ChatCompletionRequest
-    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-        http.Error(w, "Invalid request body", http.StatusBadRequest)
-        return
-    }
-
-    if len(req.Messages) == 0 {
-        http.Error(w, "Messages are required", http.StatusBadRequest)
         return
     }
 
@@ -89,20 +56,20 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
     }
 
     proxyURL, _ := url.Parse(proxy)
-    client := &http.Client{
-        Transport: &http.Transport{
-            Proxy: http.ProxyURL(proxyURL),
-        },
+    transport := &http.Transport{
+        Proxy: http.ProxyURL(proxyURL),
     }
+    client := &http.Client{Transport: transport}
 
     deepinfraURL := "https://api.deepinfra.com/v1/openai/chat/completions"
-    deepinfraReq, _ := http.NewRequest("POST", deepinfraURL, r.Body)
+    deepinfraReq, _ := http.NewRequest(r.Method, deepinfraURL, r.Body)
     deepinfraReq.Header = r.Header
     deepinfraReq.Header.Set("X-Deepinfra-Source", "web-page")
     deepinfraReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36")
 
     resp, err := client.Do(deepinfraReq)
     if err != nil {
+        removeProxy(proxy)
         http.Error(w, "Failed to call Deepinfra API", http.StatusInternalServerError)
         return
     }
@@ -117,14 +84,14 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
     io.Copy(w, resp.Body)
 }
 
-func updateWorkingProxies() {
-    proxyMutex.Lock()
-    defer proxyMutex.Unlock()
-
-    if time.Since(lastUpdate) < 15*time.Minute && len(workingProxies) > 0 {
-        return
+func updateWorkingProxiesPeriodically() {
+    for {
+        updateWorkingProxies()
+        time.Sleep(15 * time.Minute)
     }
+}
 
+func updateWorkingProxies() {
     proxies, err := getProxyList()
     if err != nil {
         fmt.Println("Failed to get proxy list:", err)
@@ -149,29 +116,46 @@ func updateWorkingProxies() {
         close(results)
     }()
 
-    workingProxies = []string{}
+    newProxies := make([]string, 0, len(proxies))
     for proxy := range results {
-        workingProxies = append(workingProxies, proxy)
+        newProxies = append(newProxies, proxy)
     }
 
+    proxyMutex.Lock()
+    workingProxies = newProxies
     lastUpdate = time.Now()
+    proxyMutex.Unlock()
 }
 
 func getWorkingProxy() string {
+    proxyMutex.RLock()
+    if len(workingProxies) > 0 {
+        proxy := workingProxies[0]
+        proxyMutex.RUnlock()
+        removeProxy(proxy)
+        return proxy
+    }
+    proxyMutex.RUnlock()
+
+    updateWorkingProxies()
+
+    proxyMutex.RLock()
+    defer proxyMutex.RUnlock()
+    if len(workingProxies) > 0 {
+        return workingProxies[0]
+    }
+    return ""
+}
+
+func removeProxy(proxy string) {
     proxyMutex.Lock()
     defer proxyMutex.Unlock()
-
-    if len(workingProxies) == 0 || time.Since(lastUpdate) > 15*time.Minute {
-        updateWorkingProxies()
+    for i, p := range workingProxies {
+        if p == proxy {
+            workingProxies = append(workingProxies[:i], workingProxies[i+1:]...)
+            break
+        }
     }
-
-    if len(workingProxies) == 0 {
-        return ""
-    }
-
-    proxy := workingProxies[0]
-    workingProxies = workingProxies[1:]
-    return proxy
 }
 
 func getProxyList() ([]string, error) {
