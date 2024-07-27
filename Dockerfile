@@ -4,11 +4,14 @@ FROM golang:1.20-alpine
 # Set the working directory
 WORKDIR /app
 
+# Copy go.mod file
+COPY go.mod .
+
+# Download all dependencies and generate go.sum
+RUN go mod download && go mod verify
+
 # Copy the source code
 COPY . .
-
-# Download all dependencies
-RUN go mod download
 
 # Build the application
 RUN go build -o main .
