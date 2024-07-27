@@ -118,7 +118,6 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 	if chatReq.MaxTokens == 0 {
 		chatReq.MaxTokens = 15000
 	}
-	chatReq.Stream = true
 
 	data, err := json.Marshal(chatReq)
 	if err != nil {
@@ -153,16 +152,22 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if resp.StatusCode == http.StatusOK {
-			w.Header().Set("Content-Type", "text/event-stream")
-			w.WriteHeader(http.StatusOK)
+			if chatReq.Stream {
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.WriteHeader(http.StatusOK)
 
-			scanner := bufio.NewScanner(resp.Body)
-			for scanner.Scan() {
-				line := scanner.Text()
-				if line != "" {
-					fmt.Fprintf(w, "data: %s\n\n", line)
-					w.(http.Flusher).Flush()
+				scanner := bufio.NewScanner(resp.Body)
+				for scanner.Scan() {
+					line := scanner.Text()
+					if line != "" {
+						fmt.Fprintf(w, "data: %s\n\n", line)
+						w.(http.Flusher).Flush()
+					}
 				}
+			} else {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				io.Copy(w, resp.Body)
 			}
 			resp.Body.Close()
 			return
