@@ -1,9 +1,11 @@
 package main
 
 import (
+    "bytes"
     "encoding/json"
     "fmt"
     "io"
+    "mime/multipart"
     "net/http"
     "net/url"
     "os"
@@ -33,9 +35,16 @@ type ChatMessage struct {
     Content string `json:"content"`
 }
 
+type WhisperRequest struct {
+    File     multipart.File
+    Task     string
+    Language string
+}
+
 func main() {
     go updateWorkingProxiesPeriodically()
     http.HandleFunc("/v1/chat/completions", chatCompletionsHandler)
+    http.HandleFunc("/v1/audio/transcriptions", whisperHandler)
     port := os.Getenv("PORT")
     if port == "" {
         port = "8080"
@@ -82,6 +91,98 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
     }
     w.WriteHeader(resp.StatusCode)
     io.Copy(w, resp.Body)
+}
+
+func whisperHandler(w http.ResponseWriter, r *http.Request) {
+    if r.Method != http.MethodPost {
+        http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+        return
+    }
+
+    err := r.ParseMultipartForm(10 << 20)
+    if err != nil {
+        http.Error(w, "Failed to parse form", http.StatusBadRequest)
+        return
+    }
+
+    file, _, err := r.FormFile("file")
+    if err != nil {
+        http.Error(w, "Failed to get file from form", http.StatusBadRequest)
+        return
+    }
+    defer file.Close()
+
+    task := r.FormValue("task")
+    if task == "" {
+        task = "transcribe"
+    }
+
+    language := r.FormValue("language")
+
+    whisperReq := WhisperRequest{
+        File:     file,
+        Task:     task,
+        Language: language,
+    }
+
+    proxy := getWorkingProxy()
+    if proxy == "" {
+        http.Error(w, "No working proxies available", http.StatusServiceUnavailable)
+        return
+    }
+
+    resp, err := sendWhisperRequest(whisperReq, proxy)
+    if err != nil {
+        removeProxy(proxy)
+        http.Error(w, "Failed to call Deepinfra Whisper API", http.StatusInternalServerError)
+        return
+    }
+    defer resp.Body.Close()
+
+    for key, values := range resp.Header {
+        for _, value := range values {
+            w.Header().Add(key, value)
+        }
+    }
+    w.WriteHeader(resp.StatusCode)
+    io.Copy(w, resp.Body)
+}
+
+func sendWhisperRequest(req WhisperRequest, proxyStr string) (*http.Response, error) {
+    proxyURL, _ := url.Parse(proxyStr)
+    client := &http.Client{
+        Transport: &http.Transport{
+            Proxy: http.ProxyURL(proxyURL),
+        },
+    }
+
+    body := &bytes.Buffer{}
+    writer := multipart.NewWriter(body)
+
+    part, err := writer.CreateFormFile("audio", "audio.wav")
+    if err != nil {
+        return nil, err
+    }
+    io.Copy(part, req.File)
+
+    writer.WriteField("task", req.Task)
+    if req.Language != "" {
+        writer.WriteField("language", req.Language)
+    }
+
+    writer.Close()
+
+    deepinfraURL := "https://api.deepinfra.com/v1/inference/openai/whisper-large-v3"
+    httpReq, err := http.NewRequest("POST", deepinfraURL, body)
+    if err != nil {
+        return nil, err
+    }
+
+    httpReq.Header.Set("Content-Type", writer.FormDataContentType())
+    httpReq.Header.Set("X-Deepinfra-Source", "web-page")
+    httpReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36")
+
+    return client.Do(httpReq)
 }
 
 func updateWorkingProxiesPeriodically() {
