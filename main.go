@@ -69,15 +69,27 @@ var SUPPORTED_MODELS = []string{
 }
 
 func main() {
-	go updateWorkingProxiesPeriodically()
-	http.HandleFunc("/v1/chat/completions", chatCompletionsHandler)
-	http.HandleFunc("/v1/audio/transcriptions", whisperHandler)
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
-	fmt.Printf("🚀 Server starting on port %s\n", port)
-	http.ListenAndServe(":"+port, nil)
+        go updateWorkingProxiesPeriodically()
+        http.HandleFunc("/v1/chat/completions", chatCompletionsHandler)
+        http.HandleFunc("/v1/audio/transcriptions", whisperHandler)
+        http.HandleFunc("/models", modelsHandler)
+        port := os.Getenv("PORT")
+        if port == "" {
+                port = "8080"
+        }
+        fmt.Printf("🚀 Server starting on port %s\n", port)
+        http.ListenAndServe(":"+port, nil)
+}
+
+func modelsHandler(w http.ResponseWriter, r *http.Request) {
+        if r.Method != http.MethodGet {
+                http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+                return
+        }
+        
+        w.Header().Set("Content-Type", "application/json")
+        w.WriteHeader(http.StatusOK)
+        json.NewEncoder(w).Encode(SUPPORTED_MODELS)
 }
 
 func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
