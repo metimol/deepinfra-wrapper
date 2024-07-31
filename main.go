@@ -180,7 +180,6 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 		resp.Body.Close()
 		removeProxy(proxy)
 		fmt.Printf("❌ Error response from Deepinfra API: %s\n", string(body))
-		time.Sleep(time.Second)
 	}
 
 	errorResponse := OpenAIError{
@@ -232,7 +231,7 @@ func whisperHandler(w http.ResponseWriter, r *http.Request) {
 		Language: language,
 	}
 
-	for i := 0; i < 30; i++ {
+	for i := 0; i < 5; i++ {
 		proxy := getWorkingProxy()
 		if proxy == "" {
 			time.Sleep(time.Second)
@@ -288,7 +287,7 @@ func sendWhisperRequest(req WhisperRequest, proxyStr string) (*http.Response, er
 		Transport: &http.Transport{
 			Proxy: http.ProxyURL(proxyURL),
 		},
-		Timeout: 60 * time.Second,
+		Timeout: 5 * time.Minute,
 	}
 
 	body := &bytes.Buffer{}
