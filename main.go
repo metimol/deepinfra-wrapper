@@ -117,6 +117,7 @@ func initializeServices(ready chan<- bool) {
 		fmt.Println("⚠️  Warning: Could not find supported models. Service may not function correctly.")
 	} else {
 		fmt.Printf("✅ Found %d supported models\n", modelCount)
+	}
 	
 	go manageProxiesAndModels()
 	
