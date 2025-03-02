@@ -13,12 +13,16 @@ import (
 	"sync"
 	"time"
 	"bufio"
+	"context"
 )
 
 var (
-	workingProxies []string
-	proxyMutex     sync.RWMutex
-	lastUpdate     time.Time
+	workingProxies    []string
+	proxyMutex        sync.RWMutex
+	supportedModels   []string
+	modelsMutex       sync.RWMutex
+	lastProxyUpdate   time.Time
+	lastModelsUpdate  time.Time
 )
 
 type ChatCompletionRequest struct {
@@ -30,8 +34,8 @@ type ChatCompletionRequest struct {
 }
 
 type ChatMessage struct {
-	Role    string `json:"content"`
-	Content string `json:"role"`
+	Role    string `json:"role"`
+	Content string `json:"content"`
 }
 
 type WhisperRequest struct {
@@ -48,79 +52,74 @@ type OpenAIError struct {
 	} `json:"error"`
 }
 
-const (
-	baseURL    = "https://api.deepinfra.com/v1/openai/chat/completions"
-	whisperURL = "https://api.deepinfra.com/v1/inference/openai/whisper-large-v3"
-)
-
-var SUPPORTED_MODELS = []string{
-    "lizpreciatior/lzlv_70b_fp16_hf",
-    "openbmb/MiniCPM-Llama3-V-2_5",
-    "meta-llama/Meta-Llama-3.1-70B-Instruct",
-    "Phind/Phind-CodeLlama-34B-v2",
-    "Sao10K/L3-70B-Euryale-v2.1",
-    "cognitivecomputations/dolphin-2.9.1-llama-3-70b",
-    "meta-llama/Meta-Llama-3.1-8B-Instruct",
-    "Qwen/Qwen2-72B-Instruct",
-    "meta-llama/Llama-3.2-11B-Vision-Instruct",
-    "mistralai/Mixtral-8x7B-Instruct-v0.1",
-    "01-ai/Yi-34B-Chat",
-    "mattshumer/Reflection-Llama-3.1-70B",
-    "mistralai/Mistral-Nemo-Instruct-2407",
-    "microsoft/WizardLM-2-8x22B",
-    "microsoft/WizardLM-2-7B",
-    "openchat/openchat-3.6-8b",
-    "deepinfra/airoboros-70b",
-    "codellama/CodeLlama-70b-Instruct-hf",
-    "meta-llama/Llama-3.2-3B-Instruct",
-    "Qwen/Qwen2.5-Coder-7B",
-    "mistralai/Mistral-7B-Instruct-v0.3",
-    "bigcode/starcoder2-15b",
-    "cognitivecomputations/dolphin-2.6-mixtral-8x7b",
-    "google/codegemma-7b-it",
-    "mistralai/Mistral-7B-Instruct-v0.1",
-    "meta-llama/Llama-2-70b-chat-hf",
-    "meta-llama/Llama-3.2-90B-Vision-Instruct",
-    "mistralai/Mixtral-8x22B-v0.1",
-    "meta-llama/Llama-2-7b-chat-hf",
-    "mistralai/Mixtral-8x22B-Instruct-v0.1",
-    "mistralai/Mistral-7B-Instruct-v0.2",
-    "google/gemma-2-27b-it",
-    "HuggingFaceH4/zephyr-orpo-141b-A35b-v0.1",
-    "google/gemma-2-9b-it",
-    "meta-llama/Llama-3.2-1B-Instruct",
-    "codellama/CodeLlama-34b-Instruct-hf",
-    "meta-llama/Meta-Llama-3-8B-Instruct",
-    "google/gemma-1.1-7b-it",
-    "bigcode/starcoder2-15b-instruct-v0.1",
-    "databricks/dbrx-instruct",
-    "microsoft/Phi-3-medium-4k-instruct",
-    "meta-llama/Llama-2-13b-chat-hf",
-    "meta-llama/Meta-Llama-3-70B-Instruct",
+type ModelResponse struct {
+	Object string `json:"object"`
+	Data   []struct {
+		ID     string `json:"id"`
+		Object string `json:"object"`
+	} `json:"data"`
 }
 
+const (
+	deepInfraBaseURL = "https://api.deepinfra.com/v1/openai"
+	chatEndpoint     = "/chat/completions"
+	whisperEndpoint  = "/v1/inference/openai/whisper-large-v3"
+	modelsEndpoint   = "/models"
+	proxyListURL     = "https://api.proxyscrape.com/v3/free-proxy-list/get?request=displayproxies&protocol=http&proxy_format=protocolipport&format=text&anonymity=Elite,Anonymous&timeout=5015"
+	proxyUpdateTime  = 10 * time.Minute
+	modelsUpdateTime = 60 * time.Minute
+	maxProxyAttempts = 30
+	maxRetries = 3
+)
+
 func main() {
-        go updateWorkingProxiesPeriodically()
-        http.HandleFunc("/v1/chat/completions", chatCompletionsHandler)
-        http.HandleFunc("/v1/audio/transcriptions", whisperHandler)
-        http.HandleFunc("/models", modelsHandler)
-        port := os.Getenv("PORT")
-        if port == "" {
-                port = "8080"
-        }
-        fmt.Printf("🚀 Server starting on port %s\n", port)
-        http.ListenAndServe(":"+port, nil)
+	go manageProxiesAndModels()
+	
+	http.HandleFunc("/v1/chat/completions", chatCompletionsHandler)
+	http.HandleFunc("/v1/audio/transcriptions", whisperHandler)
+	http.HandleFunc("/models", modelsHandler)
+	
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+	fmt.Printf("🚀 Server starting on port %s\n", port)
+	http.ListenAndServe(":"+port, nil)
+}
+
+func manageProxiesAndModels() {
+	updateWorkingProxies()
+	updateSupportedModels()
+	
+	proxyTicker := time.NewTicker(proxyUpdateTime)
+	modelsTicker := time.NewTicker(modelsUpdateTime)
+	
+	for {
+		select {
+		case <-proxyTicker.C:
+			fmt.Println("⏰ Scheduled proxy update")
+			updateWorkingProxies()
+		case <-modelsTicker.C:
+			fmt.Println("⏰ Scheduled models update")
+			updateSupportedModels()
+		}
+	}
 }
 
 func modelsHandler(w http.ResponseWriter, r *http.Request) {
-        if r.Method != http.MethodGet {
-                http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-                return
-        }
-        
-        w.Header().Set("Content-Type", "application/json")
-        w.WriteHeader(http.StatusOK)
-        json.NewEncoder(w).Encode(SUPPORTED_MODELS)
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	
+	modelsMutex.RLock()
+	models := make([]string, len(supportedModels))
+	copy(models, supportedModels)
+	modelsMutex.RUnlock()
+	
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(models)
 }
 
 func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
@@ -133,25 +132,12 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 	var chatReq ChatCompletionRequest
 	err := json.NewDecoder(r.Body).Decode(&chatReq)
 	if err != nil {
-		http.Error(w, "Failed to parse request body", http.StatusBadRequest)
+		sendErrorResponse(w, "Failed to parse request body", "invalid_request_error", http.StatusBadRequest)
 		return
 	}
 
 	if !isModelSupported(chatReq.Model) {
-		errorResponse := OpenAIError{
-			Error: struct {
-				Message string `json:"message"`
-				Type    string `json:"type"`
-				Code    string `json:"code"`
-			}{
-				Message: "Unsupported model. Please use one of the supported models.",
-				Type:    "invalid_request_error",
-				Code:    "model_not_found",
-			},
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(errorResponse)
+		sendErrorResponse(w, "Unsupported model. Please use one of the supported models.", "invalid_request_error", http.StatusBadRequest, "model_not_found")
 		return
 	}
 
@@ -162,84 +148,132 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 		chatReq.MaxTokens = 15000
 	}
 
+	for i := range chatReq.Messages {
+		if chatReq.Messages[i].Role == "content" && chatReq.Messages[i].Content == "user" {
+			chatReq.Messages[i].Role, chatReq.Messages[i].Content = chatReq.Messages[i].Content, chatReq.Messages[i].Role
+		}
+	}
+
 	data, err := json.Marshal(chatReq)
 	if err != nil {
-		http.Error(w, "Failed to marshal request", http.StatusInternalServerError)
+		sendErrorResponse(w, "Failed to marshal request", "internal_error", http.StatusInternalServerError)
 		return
 	}
 
-	for i := 0; i < 30; i++ {
-		proxy := getWorkingProxy()
-		if proxy == "" {
-			time.Sleep(time.Second)
-			continue
-		}
+	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+	defer cancel()
 
-		proxyURL, _ := url.Parse(proxy)
-		client := &http.Client{
-			Transport: &http.Transport{
-				Proxy: http.ProxyURL(proxyURL),
-			},
-			Timeout: 60 * time.Second,
-		}
+	success := false
+	var lastErr error
+	usedProxies := make(map[string]bool)
 
-		req, _ := http.NewRequest("POST", baseURL, bytes.NewBuffer(data))
-		req.Header = getHeaders()
-
-		fmt.Printf("🔗 Sending request to %s using proxy %s\n", baseURL, proxy)
-		resp, err := client.Do(req)
-		if err != nil {
-			removeProxy(proxy)
-			time.Sleep(time.Second)
-			continue
-		}
-
-		if resp.StatusCode == http.StatusOK {
-			if chatReq.Stream {
-				w.Header().Set("Content-Type", "text/event-stream")
-				w.WriteHeader(http.StatusOK)
-
-				scanner := bufio.NewScanner(resp.Body)
-				for scanner.Scan() {
-					line := scanner.Text()
-					if line != "" {
-						if strings.HasPrefix(line, "data: ") {
-							fmt.Fprintf(w, "%s\n\n", line)
-						} else {
-							fmt.Fprintf(w, "data: %s\n\n", line)
-						}
-						w.(http.Flusher).Flush()
-					}
-				}
-			} else {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusOK)
-				io.Copy(w, resp.Body)
-			}
-			resp.Body.Close()
+	for i := 0; i < maxProxyAttempts && !success; i++ {
+		select {
+		case <-ctx.Done():
+			sendErrorResponse(w, "Request timeout", "timeout", http.StatusGatewayTimeout)
 			return
+		default:
+			proxy := getWorkingProxy()
+			if proxy == "" {
+				if i > 0 {
+					time.Sleep(500 * time.Millisecond)
+				}
+				continue
+			}
+			usedProxies[proxy] = true
+
+			result, err := sendChatRequest(ctx, proxy, deepInfraBaseURL+chatEndpoint, data, chatReq.Stream, w)
+			if err != nil {
+				lastErr = err
+				removeProxy(proxy)
+				continue
+			}
+			
+			if result {
+				success = true
+				break
+			}
 		}
-
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		removeProxy(proxy)
-		fmt.Printf("❌ Error response from Deepinfra API: %s\n", string(body))
 	}
 
-	errorResponse := OpenAIError{
-		Error: struct {
-			Message string `json:"message"`
-			Type    string `json:"type"`
-			Code    string `json:"code"`
-		}{
-			Message: "Unable to process the request after multiple attempts",
-			Type:    "internal_error",
-			Code:    "internal_error",
+	if !success {
+		errMsg := "Unable to process the request after multiple attempts"
+		if lastErr != nil {
+			errMsg = "Error: " + lastErr.Error()
+		}
+		sendErrorResponse(w, errMsg, "internal_error", http.StatusInternalServerError)
+	}
+}
+
+func sendChatRequest(ctx context.Context, proxy, url string, data []byte, isStream bool, w http.ResponseWriter) (bool, error) {
+	proxyURL, err := url.Parse(proxy)
+	if err != nil {
+		return false, err
+	}
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyURL(proxyURL),
 		},
+		Timeout: 60 * time.Second,
 	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(data))
+	if err != nil {
+		return false, err
+	}
+	
+	req.Header = getHeaders()
+	fmt.Printf("🔗 Sending request to %s using proxy %s\n", url, proxy)
+	
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		if isStream {
+			return handleStreamResponse(w, resp)
+		} else {
+			return handleNormalResponse(w, resp)
+		}
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	fmt.Printf("❌ Error response from Deepinfra API: %s\n", string(body))
+	return false, fmt.Errorf("API error: %s", string(body))
+}
+
+func handleStreamResponse(w http.ResponseWriter, resp *http.Response) (bool, error) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.WriteHeader(http.StatusOK)
+
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line != "" {
+			if strings.HasPrefix(line, "data: ") {
+				fmt.Fprintf(w, "%s\n\n", line)
+			} else {
+				fmt.Fprintf(w, "data: %s\n\n", line)
+			}
+			w.(http.Flusher).Flush()
+		}
+	}
+	
+	if err := scanner.Err(); err != nil {
+		return false, err
+	}
+	
+	return true, nil
+}
+
+func handleNormalResponse(w http.ResponseWriter, resp *http.Response) (bool, error) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusInternalServerError)
-	json.NewEncoder(w).Encode(errorResponse)
+	w.WriteHeader(http.StatusOK)
+	_, err := io.Copy(w, resp.Body)
+	return err == nil, err
 }
 
 func whisperHandler(w http.ResponseWriter, r *http.Request) {
@@ -251,13 +285,13 @@ func whisperHandler(w http.ResponseWriter, r *http.Request) {
 
 	err := r.ParseMultipartForm(10 << 20)
 	if err != nil {
-		http.Error(w, "Failed to parse form", http.StatusBadRequest)
+		sendErrorResponse(w, "Failed to parse form", "invalid_request_error", http.StatusBadRequest)
 		return
 	}
 
 	file, _, err := r.FormFile("file")
 	if err != nil {
-		http.Error(w, "Failed to get file from form", http.StatusBadRequest)
+		sendErrorResponse(w, "Failed to get file from form", "invalid_request_error", http.StatusBadRequest)
 		return
 	}
 	defer file.Close()
@@ -269,64 +303,64 @@ func whisperHandler(w http.ResponseWriter, r *http.Request) {
 
 	language := r.FormValue("language")
 
-	whisperReq := WhisperRequest{
-		File:     file,
-		Task:     task,
-		Language: language,
-	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
+	defer cancel()
 
-	for i := 0; i < 5; i++ {
-		proxy := getWorkingProxy()
-		if proxy == "" {
-			time.Sleep(time.Second)
-			continue
-		}
-
-		fmt.Printf("🔗 Sending whisper request to %s using proxy %s\n", whisperURL, proxy)
-		resp, err := sendWhisperRequest(whisperReq, proxy)
-		if err != nil {
-			removeProxy(proxy)
-			time.Sleep(time.Second)
-			continue
-		}
-
-		if resp.StatusCode == http.StatusOK {
-			for key, values := range resp.Header {
-				for _, value := range values {
-					w.Header().Add(key, value)
-				}
-			}
-			w.WriteHeader(resp.StatusCode)
-			io.Copy(w, resp.Body)
-			resp.Body.Close()
+	success := false
+	for i := 0; i < maxRetries && !success; i++ {
+		select {
+		case <-ctx.Done():
+			sendErrorResponse(w, "Request timeout", "timeout", http.StatusGatewayTimeout)
 			return
+		default:
+			proxy := getWorkingProxy()
+			if proxy == "" {
+				time.Sleep(time.Second)
+				continue
+			}
+
+			fmt.Printf("🔗 Sending whisper request using proxy %s\n", proxy)
+			resp, err := sendWhisperRequest(ctx, proxy, file, task, language)
+			if err != nil {
+				removeProxy(proxy)
+				time.Sleep(time.Second)
+				continue
+			}
+
+			file.Seek(0, 0)
+
+			if resp.StatusCode == http.StatusOK {
+				for key, values := range resp.Header {
+					for _, value := range values {
+						w.Header().Add(key, value)
+					}
+				}
+				w.WriteHeader(resp.StatusCode)
+				io.Copy(w, resp.Body)
+				resp.Body.Close()
+				success = true
+				break
+			}
+
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			removeProxy(proxy)
+			fmt.Printf("❌ Error response from Deepinfra Whisper API: %s\n", string(body))
+			time.Sleep(time.Second)
 		}
-
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		removeProxy(proxy)
-		fmt.Printf("❌ Error response from Deepinfra Whisper API: %s\n", string(body))
-		time.Sleep(time.Second)
 	}
 
-	errorResponse := OpenAIError{
-		Error: struct {
-			Message string `json:"message"`
-			Type    string `json:"type"`
-			Code    string `json:"code"`
-		}{
-			Message: "Unable to process the whisper request after multiple attempts",
-			Type:    "internal_error",
-			Code:    "internal_error",
-		},
+	if !success {
+		sendErrorResponse(w, "Unable to process the whisper request after multiple attempts", "internal_error", http.StatusInternalServerError)
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusInternalServerError)
-	json.NewEncoder(w).Encode(errorResponse)
 }
 
-func sendWhisperRequest(req WhisperRequest, proxyStr string) (*http.Response, error) {
-	proxyURL, _ := url.Parse(proxyStr)
+func sendWhisperRequest(ctx context.Context, proxyStr string, fileData multipart.File, task, language string) (*http.Response, error) {
+	proxyURL, err := url.Parse(proxyStr)
+	if err != nil {
+		return nil, err
+	}
+
 	client := &http.Client{
 		Transport: &http.Transport{
 			Proxy: http.ProxyURL(proxyURL),
@@ -341,16 +375,23 @@ func sendWhisperRequest(req WhisperRequest, proxyStr string) (*http.Response, er
 	if err != nil {
 		return nil, err
 	}
-	io.Copy(part, req.File)
-
-	writer.WriteField("task", req.Task)
-	if req.Language != "" {
-		writer.WriteField("language", req.Language)
+	
+	_, err = io.Copy(part, fileData)
+	if err != nil {
+		return nil, err
 	}
 
-	writer.Close()
+	writer.WriteField("task", task)
+	if language != "" {
+		writer.WriteField("language", language)
+	}
 
-	httpReq, err := http.NewRequest("POST", whisperURL, body)
+	err = writer.Close()
+	if err != nil {
+		return nil, err
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", deepInfraBaseURL+whisperEndpoint, body)
 	if err != nil {
 		return nil, err
 	}
@@ -362,26 +403,25 @@ func sendWhisperRequest(req WhisperRequest, proxyStr string) (*http.Response, er
 	return client.Do(httpReq)
 }
 
-func updateWorkingProxiesPeriodically() {
-	for {
-		updateWorkingProxies()
-		time.Sleep(15 * time.Minute)
-	}
-}
-
 func updateWorkingProxies() {
 	proxies, err := getProxyList()
 	if err != nil {
+		fmt.Printf("❌ Error fetching proxy list: %v\n", err)
 		return
 	}
 
+	fmt.Printf("🔍 Testing %d proxies...\n", len(proxies))
 	var wg sync.WaitGroup
 	results := make(chan string, len(proxies))
+	semaphore := make(chan struct{}, 50)
 
 	for _, proxy := range proxies {
 		wg.Add(1)
 		go func(p string) {
 			defer wg.Done()
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+			
 			if checkProxy(p) {
 				results <- p
 			}
@@ -393,17 +433,186 @@ func updateWorkingProxies() {
 		close(results)
 	}()
 
-	newProxies := make([]string, 0, len(proxies))
+	newProxies := make([]string, 0, len(proxies)/10)
 	for proxy := range results {
 		newProxies = append(newProxies, proxy)
 	}
 
 	proxyMutex.Lock()
 	workingProxies = newProxies
-	lastUpdate = time.Now()
+	lastProxyUpdate = time.Now()
 	proxyMutex.Unlock()
 
 	fmt.Printf("✅ Found %d working proxies\n", len(newProxies))
+}
+
+func updateSupportedModels() {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	newModels, err := fetchSupportedModels(ctx)
+	if err != nil {
+		fmt.Printf("❌ Error fetching models list: %v\n", err)
+		return
+	}
+
+	if len(newModels) > 0 {
+		modelsMutex.Lock()
+		supportedModels = newModels
+		lastModelsUpdate = time.Now()
+		modelsMutex.Unlock()
+		fmt.Printf("📋 Updated supported models list with %d models\n", len(newModels))
+	} else {
+		fmt.Printf("⚠️ No models were found, keeping existing list\n")
+	}
+}
+
+func fetchSupportedModels(ctx context.Context) ([]string, error) {
+	allModels, err := fetchAllModels(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	fmt.Printf("🔍 Found %d models, testing which ones are accessible...\n", len(allModels))
+	
+	var wg sync.WaitGroup
+	results := make(chan string, len(allModels))
+	semaphore := make(chan struct{}, 10)
+	
+	for _, model := range allModels {
+		wg.Add(1)
+		go func(m string) {
+			defer wg.Done()
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+			
+			if isModelAccessible(ctx, m) {
+				results <- m
+				fmt.Printf("✅ Model accessible: %s\n", m)
+			} else {
+				fmt.Printf("❌ Model not accessible: %s\n", m)
+			}
+		}(model)
+	}
+	
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+	
+	var accessibleModels []string
+	for model := range results {
+		accessibleModels = append(accessibleModels, model)
+	}
+	
+	return accessibleModels, nil
+}
+
+func fetchAllModels(ctx context.Context) ([]string, error) {
+	proxy := getWorkingProxy()
+	if proxy == "" {
+		return nil, fmt.Errorf("no working proxy available")
+	}
+	
+	proxyURL, err := url.Parse(proxy)
+	if err != nil {
+		return nil, err
+	}
+	
+	client := &http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyURL(proxyURL),
+		},
+		Timeout: 30 * time.Second,
+	}
+	
+	req, err := http.NewRequestWithContext(ctx, "GET", deepInfraBaseURL+modelsEndpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-Deepinfra-Source", "web-page")
+	
+	resp, err := client.Do(req)
+	if err != nil {
+		removeProxy(proxy)
+		return nil, err
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode != http.StatusOK {
+		removeProxy(proxy)
+		return nil, fmt.Errorf("failed to get models list: status %d", resp.StatusCode)
+	}
+	
+	var modelResp ModelResponse
+	if err := json.NewDecoder(resp.Body).Decode(&modelResp); err != nil {
+		return nil, err
+	}
+	
+	var models []string
+	for _, model := range modelResp.Data {
+		models = append(models, model.ID)
+	}
+	
+	return models, nil
+}
+
+func isModelAccessible(ctx context.Context, model string) bool {
+	proxy := getWorkingProxy()
+	if proxy == "" {
+		return false
+	}
+	
+	proxyURL, err := url.Parse(proxy)
+	if err != nil {
+		return false
+	}
+	
+	client := &http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyURL(proxyURL),
+		},
+		Timeout: 20 * time.Second,
+	}
+	
+	chatReq := ChatCompletionRequest{
+		Model: model,
+		Messages: []ChatMessage{
+			{
+				Role:    "user",
+				Content: "Hello",
+			},
+		},
+	}
+	
+	data, err := json.Marshal(chatReq)
+	if err != nil {
+		return false
+	}
+	
+	req, err := http.NewRequestWithContext(ctx, "POST", deepInfraBaseURL+chatEndpoint, bytes.NewBuffer(data))
+	if err != nil {
+		return false
+	}
+	
+	req.Header = getHeaders()
+	
+	resp, err := client.Do(req)
+	if err != nil {
+		removeProxy(proxy)
+		return false
+	}
+	defer resp.Body.Close()
+	
+	body, _ := io.ReadAll(resp.Body)
+	
+	if strings.Contains(string(body), "Not authenticated") {
+		return false
+	}
+	
+	return resp.StatusCode == http.StatusOK
 }
 
 func getWorkingProxy() string {
@@ -411,12 +620,13 @@ func getWorkingProxy() string {
 	if len(workingProxies) > 0 {
 		proxy := workingProxies[0]
 		proxyMutex.RUnlock()
-		removeProxy(proxy)
 		return proxy
 	}
 	proxyMutex.RUnlock()
 
-	updateWorkingProxies()
+	if time.Since(lastProxyUpdate) > 2*time.Minute {
+		updateWorkingProxies()
+	}
 
 	proxyMutex.RLock()
 	defer proxyMutex.RUnlock()
@@ -431,14 +641,19 @@ func removeProxy(proxy string) {
 	defer proxyMutex.Unlock()
 	for i, p := range workingProxies {
 		if p == proxy {
-			workingProxies = append(workingProxies[:i], workingProxies[i+1:]...)
+			workingProxies[i] = workingProxies[len(workingProxies)-1]
+			workingProxies = workingProxies[:len(workingProxies)-1]
 			break
 		}
 	}
 }
 
 func getProxyList() ([]string, error) {
-	resp, err := http.Get("https://api.proxyscrape.com/v3/free-proxy-list/get?request=displayproxies&protocol=http&proxy_format=protocolipport&format=text&anonymity=Elite,Anonymous&timeout=5015")
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+	
+	resp, err := client.Get(proxyListURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get proxy list: %v", err)
 	}
@@ -449,7 +664,12 @@ func getProxyList() ([]string, error) {
 		return nil, fmt.Errorf("failed to read proxy list: %v", err)
 	}
 
-	return strings.Fields(string(body)), nil
+	proxies := strings.Fields(string(body))
+	if len(proxies) == 0 {
+		return nil, fmt.Errorf("empty proxy list received")
+	}
+	
+	return proxies, nil
 }
 
 func checkProxy(proxy string) bool {
@@ -465,7 +685,7 @@ func checkProxy(proxy string) bool {
 		Timeout: 5 * time.Second,
 	}
 
-	resp, err := client.Get("https://api.deepinfra.com/v1/openai/models")
+	resp, err := client.Get(deepInfraBaseURL + modelsEndpoint)
 	if err != nil {
 		return false
 	}
@@ -483,10 +703,42 @@ func getHeaders() http.Header {
 }
 
 func isModelSupported(model string) bool {
-	for _, supportedModel := range SUPPORTED_MODELS {
+	modelsMutex.RLock()
+	defer modelsMutex.RUnlock()
+	
+	if len(supportedModels) == 0 && time.Since(lastModelsUpdate) > 5*time.Second {
+		modelsMutex.RUnlock()
+		updateSupportedModels()
+		modelsMutex.RLock()
+	}
+	
+	for _, supportedModel := range supportedModels {
 		if model == supportedModel {
 			return true
 		}
 	}
 	return false
+}
+
+func sendErrorResponse(w http.ResponseWriter, message, errorType string, statusCode int, errorCode ...string) {
+	code := errorType
+	if len(errorCode) > 0 {
+		code = errorCode[0]
+	}
+	
+	errorResponse := OpenAIError{
+		Error: struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+			Code    string `json:"code"`
+		}{
+			Message: message,
+			Type:    errorType,
+			Code:    code,
+		},
+	}
+	
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	json.NewEncoder(w).Encode(errorResponse)
 }

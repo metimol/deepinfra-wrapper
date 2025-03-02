@@ -1,11 +1,24 @@
-FROM golang:1.20-alpine
+FROM golang:1.21-alpine
 
 WORKDIR /app
 
 COPY go.mod .
-COPY main.go .
 
-RUN go build -o main .
+RUN go mod download
+
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -ldflags="-w -s" -o main .
+
+FROM alpine:latest
+
+RUN apk --no-cache add ca-certificates
+
+WORKDIR /app
+
+COPY --from=0 /app/main .
+
+RUN chmod +x ./main
 
 EXPOSE 8080
 
