@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"strings"
 
-	"../services"
-	"../utils"
+	"deepinfra-wrapper/services"
+	"deepinfra-wrapper/utils"
 )
 
 func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {

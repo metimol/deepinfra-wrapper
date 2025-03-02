@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"../services"
-	"../types"
-	"../utils"
+	"deepinfra-wrapper/services"
+	"deepinfra-wrapper/types"
+	"deepinfra-wrapper/utils"
 )
 
 func ChatCompletionsHandler(w http.ResponseWriter, r *http.Request) {

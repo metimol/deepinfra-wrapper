@@ -6,7 +6,7 @@ import (
     "html/template"
     "net/http"
 
-    "../services"
+    "deepinfra-wrapper/services"
 )
 
 func SwaggerHandler(w http.ResponseWriter, r *http.Request) {

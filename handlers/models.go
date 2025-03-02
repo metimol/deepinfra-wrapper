@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"../services"
+	"deepinfra-wrapper/services"
 )
 
 func ModelsHandler(w http.ResponseWriter, r *http.Request) {

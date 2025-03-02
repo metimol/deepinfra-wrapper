@@ -7,8 +7,8 @@ import (
 	"os"
 	"time"
 
-	"./handlers"
-	"./services"
+	"deepinfra-wrapper/handlers"
+    "deepinfra-wrapper/services"
 )
 
 func main() {

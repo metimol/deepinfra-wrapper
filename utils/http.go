@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"../types"
+	"deepinfra-wrapper/types"
 )
 
 func SendErrorResponse(w http.ResponseWriter, message, errorType string, statusCode int, errorCode ...string) {

@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"../types"
+	"deepinfra-wrapper/types"
 )
 
 var (
