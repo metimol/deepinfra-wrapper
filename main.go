@@ -205,7 +205,7 @@ func chatCompletionsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func sendChatRequest(ctx context.Context, proxy, url string, data []byte, isStream bool, w http.ResponseWriter) (bool, error) {
+func sendChatRequest(ctx context.Context, proxy, endpoint string, data []byte, isStream bool, w http.ResponseWriter) (bool, error) {
 	proxyURL, err := url.Parse(proxy)
 	if err != nil {
 		return false, err
@@ -218,13 +218,13 @@ func sendChatRequest(ctx context.Context, proxy, url string, data []byte, isStre
 		Timeout: 60 * time.Second,
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(data))
+	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewBuffer(data))
 	if err != nil {
 		return false, err
 	}
 	
 	req.Header = getHeaders()
-	fmt.Printf("🔗 Sending request to %s using proxy %s\n", url, proxy)
+	fmt.Printf("🔗 Sending request to %s using proxy %s\n", endpoint, proxy)
 	
 	resp, err := client.Do(req)
 	if err != nil {
