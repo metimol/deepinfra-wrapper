@@ -30,6 +30,10 @@ func GetAPIKey() string {
 	return apiKey
 }
 
+func IsAuthEnabled() bool {
+    return apiKey != ""
+}
+
 func GetModelCount() int {
 	modelsMutex.RLock()
 	defer modelsMutex.RUnlock()
