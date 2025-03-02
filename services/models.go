@@ -89,8 +89,6 @@ func fetchSupportedModels(ctx context.Context) ([]string, error) {
 			if isModelAccessible(ctx, m) {
 				fmt.Printf("✅ Model accessible: %s\n", m)
 				results <- m
-			} else {
-				fmt.Printf("❌ Model not accessible: %s\n", m)
 			}
 		}(model)
 	}
