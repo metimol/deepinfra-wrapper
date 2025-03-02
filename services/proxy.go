@@ -3,6 +3,7 @@ package services
 import (
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"strings"
@@ -14,6 +15,8 @@ var (
 	workingProxies  []string
 	proxyMutex      sync.RWMutex
 	lastProxyUpdate time.Time
+	proxyIndex      int
+	proxyIndexMutex sync.Mutex
 )
 
 func GetProxyCount() int {
@@ -58,44 +61,71 @@ func UpdateWorkingProxies() {
 		newProxies = append(newProxies, proxy)
 	}
 
-	proxyMutex.Lock()
-	workingProxies = newProxies
-	lastProxyUpdate = time.Now()
-	proxyMutex.Unlock()
-
-	fmt.Printf("✅ Found %d working proxies out of %d tested\n", len(newProxies), len(proxies))
+	if len(newProxies) > 0 {
+		proxyMutex.Lock()
+		workingProxies = newProxies
+		lastProxyUpdate = time.Now()
+		proxyMutex.Unlock()
+		
+		proxyIndexMutex.Lock()
+		proxyIndex = 0 
+		proxyIndexMutex.Unlock()
+		
+		fmt.Printf("✅ Found %d working proxies out of %d tested\n", len(newProxies), len(proxies))
+	} else {
+		fmt.Println("⚠️ No working proxies found after testing")
+	}
 }
 
 func GetWorkingProxy() string {
 	proxyMutex.RLock()
-	if len(workingProxies) > 0 {
-		proxy := workingProxies[0]
+	if len(workingProxies) == 0 {
 		proxyMutex.RUnlock()
-		return proxy
+		if time.Since(lastProxyUpdate) > 2*time.Minute {
+			fmt.Println("⚠️ No working proxies available, refreshing list...")
+			UpdateWorkingProxies()
+		}
+		
+		proxyMutex.RLock()
+		if len(workingProxies) == 0 {
+			proxyMutex.RUnlock()
+			return ""
+		}
 	}
+	
+	proxyCount := len(workingProxies)
 	proxyMutex.RUnlock()
-
-	if time.Since(lastProxyUpdate) > 2*time.Minute {
-		fmt.Println("⚠️ No working proxies available, refreshing list...")
-		UpdateWorkingProxies()
-	}
-
+	
+	proxyIndexMutex.Lock()
+	selectedIdx := proxyIndex
+	proxyIndex = (proxyIndex + 1) % proxyCount
+	proxyIndexMutex.Unlock()
+	
 	proxyMutex.RLock()
 	defer proxyMutex.RUnlock()
-	if len(workingProxies) > 0 {
+	
+	if selectedIdx >= len(workingProxies) {
+		if len(workingProxies) == 0 {
+			return ""
+		}
 		return workingProxies[0]
 	}
-	return ""
+	
+	return workingProxies[selectedIdx]
 }
 
 func RemoveProxy(proxy string) {
+	if proxy == "" {
+		return
+	}
+	
 	fmt.Printf("❌ Removing non-working proxy: %s\n", proxy)
 	proxyMutex.Lock()
 	defer proxyMutex.Unlock()
+	
 	for i, p := range workingProxies {
 		if p == proxy {
-			workingProxies[i] = workingProxies[len(workingProxies)-1]
-			workingProxies = workingProxies[:len(workingProxies)-1]
+			workingProxies = append(workingProxies[:i], workingProxies[i+1:]...)
 			break
 		}
 	}
@@ -123,12 +153,20 @@ func getProxyList() ([]string, error) {
 		return nil, fmt.Errorf("empty proxy list received")
 	}
 	
+	rand.Shuffle(len(proxies), func(i, j int) {
+		proxies[i], proxies[j] = proxies[j], proxies[i]
+	})
+	
 	fmt.Printf("📋 Retrieved %d potential proxies\n", len(proxies))
 	return proxies, nil
 }
 
 func checkProxy(proxy string) bool {
-	proxyURL, err := url.Parse(proxy)
+	if proxy == "" {
+		return false
+	}
+	
+	proxyURL, err := url.Parse("http://" + proxy)
 	if err != nil {
 		return false
 	}

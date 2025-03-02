@@ -6,9 +6,9 @@ const (
 	DeepInfraBaseURL = "https://api.deepinfra.com/v1/openai"
 	ChatEndpoint     = "/chat/completions"
 	ModelsEndpoint   = "/models"
-	ProxyListURL     = "https://api.proxyscrape.com/v3/free-proxy-list/get?request=displayproxies&protocol=http&proxy_format=protocolipport&format=text&anonymity=Elite,Anonymous&timeout=5015"
+	ProxyListURL     = "https://api.proxyscrape.com/v3/free-proxy-list/get?request=displayproxies&protocol=http&proxy_format=ipport&format=text&anonymity=Elite,Anonymous&timeout=5000"
 	ProxyUpdateTime  = 10 * time.Minute
 	ModelsUpdateTime = 60 * time.Minute
-	MaxProxyAttempts = 30
+	MaxProxyAttempts = 10
 	MaxRetries       = 3
 )

@@ -5,6 +5,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"deepinfra-wrapper/handlers"
@@ -21,7 +23,6 @@ func main() {
 		fmt.Println("🔐 API key authentication enabled")
 	}
 	
-	// Initialize services
 	services.InitAPIKey(apiKey)
 	
 	initReady := make(chan bool)
@@ -29,18 +30,50 @@ func main() {
 	
 	<-initReady
 	
-	// Set up routes
-	http.HandleFunc("/v1/chat/completions", handlers.AuthMiddleware(handlers.ChatCompletionsHandler))
-	http.HandleFunc("/models", handlers.ModelsHandler)
-	http.HandleFunc("/docs", handlers.SwaggerHandler)
-	http.HandleFunc("/openapi.json", handlers.OpenAPIHandler)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/chat/completions", handlers.AuthMiddleware(handlers.ChatCompletionsHandler))
+	mux.HandleFunc("/models", handlers.ModelsHandler)
+	mux.HandleFunc("/docs", handlers.SwaggerHandler)
+	mux.HandleFunc("/openapi.json", handlers.OpenAPIHandler)
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	})
 	
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
-	fmt.Printf("✅ Server started on port %s\n", port)
-	log.Fatal(http.ListenAndServe(":"+port, nil))
+	
+	server := &http.Server{
+		Addr:         ":" + port,
+		Handler:      mux,
+		ReadTimeout:  120 * time.Second,
+		WriteTimeout: 120 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
+	
+	go func() {
+		fmt.Printf("✅ Server started on port %s\n", port)
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("❌ Server error: %v", err)
+		}
+	}()
+	
+	shutdownChan := make(chan os.Signal, 1)
+	signal.Notify(shutdownChan, os.Interrupt, syscall.SIGTERM)
+	<-shutdownChan
+	
+	fmt.Println("🛑 Shutting down server...")
+	
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	
+	if err := server.Shutdown(ctx); err != nil {
+		log.Fatalf("❌ Server shutdown error: %v", err)
+	}
+	
+	fmt.Println("👋 Server shutdown complete")
 }
 
 func initializeServices(ready chan<- bool) {
@@ -50,25 +83,40 @@ func initializeServices(ready chan<- bool) {
 	services.UpdateWorkingProxies()
 	
 	proxyCount := services.GetProxyCount()
-	if proxyCount == 0 {
+	retries := 0
+	
+	for proxyCount == 0 && retries < 3 {
 		fmt.Println("⚠️  No working proxies found. Retrying...")
+		retries++
+		time.Sleep(time.Duration(retries) * time.Second)
 		services.UpdateWorkingProxies()
 		proxyCount = services.GetProxyCount()
 	}
 	
-	fmt.Printf("✅ Found %d working proxies\n", proxyCount)
+	if proxyCount == 0 {
+		fmt.Println("⚠️  Warning: Could not find working proxies. Service may not function correctly.")
+	} else {
+		fmt.Printf("✅ Found %d working proxies\n", proxyCount)
+	}
 	
 	fmt.Println("🔍 Discovering supported models...")
 	services.UpdateSupportedModels()
 	
 	modelCount := services.GetModelCount()
-	if modelCount == 0 {
+	retries = 0
+	
+	for modelCount == 0 && retries < 3 {
 		fmt.Println("⚠️  No supported models found. Retrying...")
+		retries++
+		time.Sleep(time.Duration(retries) * time.Second)
 		services.UpdateSupportedModels()
 		modelCount = services.GetModelCount()
 	}
 	
-	fmt.Printf("✅ Found %d supported models\n", modelCount)
+	if modelCount == 0 {
+		fmt.Println("⚠️  Warning: Could not find supported models. Service may not function correctly.")
+	} else {
+		fmt.Printf("✅ Found %d supported models\n", modelCount)
 	
 	go manageProxiesAndModels()
 	
