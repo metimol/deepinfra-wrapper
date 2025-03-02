@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"io"
 
 	"deepinfra-wrapper/types"
 )
@@ -204,7 +205,7 @@ func isModelAccessible(ctx context.Context, model string) bool {
 	}
 	defer resp.Body.Close()
 	
-	body, _ := json.ReadAll(resp.Body)
+	body, _ := io.ReadAll(resp.Body)
 	
 	if strings.Contains(string(body), "Not authenticated") {
 		return false
