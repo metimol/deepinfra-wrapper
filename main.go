@@ -23,6 +23,7 @@ var (
 	modelsMutex       sync.RWMutex
 	lastProxyUpdate   time.Time
 	lastModelsUpdate  time.Time
+	apiKey            string
 )
 
 type ChatCompletionRequest struct {
@@ -68,12 +69,19 @@ const (
 func main() {
 	fmt.Println("Starting service initialization...")
 	
+	apiKey = os.Getenv("API_KEY")
+	if apiKey == "" {
+		fmt.Println("Warning: API_KEY environment variable not set. Authentication will be disabled.")
+	} else {
+		fmt.Println("API key authentication enabled")
+	}
+	
 	initReady := make(chan bool)
 	go initializeService(initReady)
 	
 	<-initReady
 	
-	http.HandleFunc("/v1/chat/completions", chatCompletionsHandler)
+	http.HandleFunc("/v1/chat/completions", authMiddleware(chatCompletionsHandler))
 	http.HandleFunc("/models", modelsHandler)
 	http.HandleFunc("/docs", swaggerHandler)
 	http.HandleFunc("/openapi.json", openAPIHandler)
@@ -84,6 +92,35 @@ func main() {
 	}
 	fmt.Printf("Server started on port %s\n", port)
 	http.ListenAndServe(":"+port, nil)
+}
+
+func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if apiKey == "" {
+			next(w, r)
+			return
+		}
+
+		auth := r.Header.Get("Authorization")
+		if auth == "" {
+			sendErrorResponse(w, "Missing API key", "invalid_request_error", http.StatusUnauthorized, "invalid_api_key")
+			return
+		}
+
+		const bearerPrefix = "Bearer "
+		if !strings.HasPrefix(auth, bearerPrefix) {
+			sendErrorResponse(w, "Invalid API key format", "invalid_request_error", http.StatusUnauthorized, "invalid_api_key")
+			return
+		}
+
+		providedKey := strings.TrimPrefix(auth, bearerPrefix)
+		if providedKey != apiKey {
+			sendErrorResponse(w, "Invalid API key", "invalid_request_error", http.StatusUnauthorized, "invalid_api_key")
+			return
+		}
+
+		next(w, r)
+	}
 }
 
 func initializeService(ready chan<- bool) {
@@ -678,6 +715,22 @@ func openAPIHandler(w http.ResponseWriter, r *http.Request) {
 		modelEnum[i] = model
 	}
 
+	securitySchemes := map[string]interface{}{}
+	security := []map[string]interface{}{}
+	
+	if apiKey != "" {
+		securitySchemes["ApiKeyAuth"] = map[string]interface{}{
+			"type": "http",
+			"scheme": "bearer",
+			"bearerFormat": "API key",
+		}
+		security = []map[string]interface{}{
+			{
+				"ApiKeyAuth": []string{},
+			},
+		}
+	}
+
 	openAPISpec := map[string]interface{}{
 		"openapi": "3.0.0",
 		"info": map[string]interface{}{
@@ -695,6 +748,7 @@ func openAPIHandler(w http.ResponseWriter, r *http.Request) {
 				"post": map[string]interface{}{
 					"summary":     "Create a chat completion",
 					"operationId": "createChatCompletion",
+					"security":    security,
 					"requestBody": map[string]interface{}{
 						"required": true,
 						"content": map[string]interface{}{
@@ -718,6 +772,9 @@ func openAPIHandler(w http.ResponseWriter, r *http.Request) {
 						},
 						"400": map[string]interface{}{
 							"description": "Bad request",
+						},
+						"401": map[string]interface{}{
+							"description": "Unauthorized",
 						},
 						"500": map[string]interface{}{
 							"description": "Internal server error",
@@ -805,6 +862,7 @@ func openAPIHandler(w http.ResponseWriter, r *http.Request) {
 					},
 				},
 			},
+			"securitySchemes": securitySchemes,
 		},
 	}
 
