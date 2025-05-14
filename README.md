@@ -1,4 +1,4 @@
-# 🚀 DeepInfra Proxy
+# 🚀 DeepInfra Wrapper
 
 A lightweight, efficient proxy service that provides free and unlimited access to DeepInfra's AI models through their OpenAI-compatible API.
 
