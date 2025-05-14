@@ -19,7 +19,17 @@ A lightweight, efficient proxy service that provides free and unlimited access t
 
 ## 🚀 Quick Start
 
-### Using Docker (Recommended)
+### Using Pre-built Docker Image (Recommended)
+
+```bash
+# Pull the Docker image from GitHub Container Registry
+docker pull ghcr.io/metimol/deepinfra-wrapper:latest
+
+# Run the container
+docker run -p 8080:8080 ghcr.io/metimol/deepinfra-wrapper:latest
+```
+
+### Building Docker Image Locally
 
 ```bash
 # Build the Docker image
