@@ -33,6 +33,7 @@ func main() {
 	
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/chat/completions", handlers.AuthMiddleware(handlers.ChatCompletionsHandler))
+	mux.HandleFunc("/v1/models", handlers.OpenAIModelsHandler)
 	mux.HandleFunc("/models", handlers.ModelsHandler)
 	mux.HandleFunc("/docs", handlers.SwaggerHandler)
 	mux.HandleFunc("/openapi.json", handlers.OpenAPIHandler)

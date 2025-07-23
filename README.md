@@ -11,6 +11,8 @@ A lightweight, efficient proxy service that provides free and unlimited access t
 - 🔍 **Model availability checks** - Only exposes models that are actually accessible
 - ⚡ **Streaming support** - Full support for streaming responses
 - 🔄 **OpenAI-compatible API** - Drop-in replacement for OpenAI API clients
+- 📋 **OpenAI-compatible /v1/models endpoint** - Standard models listing endpoint
+- 🏷️ **Model metadata** - Enhanced model information with type categorization
 
 ## 📋 Requirements
 
@@ -97,11 +99,50 @@ Example request:
 
 ### List Available Models
 
+#### OpenAI-Compatible Models Endpoint (Recommended)
+
+```
+GET /v1/models
+```
+
+Returns a list of all available models in OpenAI-compatible format. This endpoint follows the official OpenAI API specification and works with any OpenAI-compatible client.
+
+Example response:
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "meta-llama/Llama-2-70b-chat-hf",
+      "object": "model",
+      "created": 1677610602,
+      "owned_by": "deepinfra"
+    },
+    {
+      "id": "mistralai/Mixtral-8x7B-Instruct-v0.1",
+      "object": "model",
+      "created": 1677610602,
+      "owned_by": "deepinfra"
+    }
+  ]
+}
+```
+
+#### Legacy Models Endpoint
+
 ```
 GET /models
 ```
 
-Returns a list of all available models that can be used with the API.
+Returns a simple array of model names. This endpoint is maintained for backward compatibility.
+
+Example response:
+```json
+[
+  "meta-llama/Llama-2-70b-chat-hf",
+  "mistralai/Mixtral-8x7B-Instruct-v0.1"
+]
+```
 
 ### API Documentation
 
@@ -132,10 +173,37 @@ OpenAPI specification document that can be imported into API tools.
 4. If a proxy fails, it's automatically removed from the rotation
 5. New proxies are regularly added to the pool to ensure reliability
 
+## 🔗 OpenAI Compatibility
+
+This service is fully compatible with the OpenAI API specification. You can use any OpenAI-compatible client library or tool by simply changing the base URL to point to your DeepInfra Wrapper instance.
+
+### Key Compatible Endpoints
+
+- `POST /v1/chat/completions` - Chat completions (matches OpenAI API)
+- `GET /v1/models` - List available models (matches OpenAI API format)
+
+### Supported Features
+
+- ✅ Chat completions
+- ✅ Streaming responses  
+- ✅ Model listing
+- ✅ Temperature and max_tokens parameters
+- ✅ Message history and conversation context
+- ✅ System messages
+
+### Model Types Supported
+
+The service automatically categorizes models by type:
+- **Text Generation**: LLaMA, GPT, Claude, Mistral, DeepSeek, Qwen models
+- **Audio**: Whisper models for speech recognition
+- **Image**: Stable Diffusion, SDXL models for image generation
+- **Embedding**: Text embedding models
+
 ## 📝 Client Usage Examples
 
 ### cURL
 
+#### Chat Completions
 ```bash
 curl -X POST "http://localhost:8080/v1/chat/completions" \
   -H "Content-Type: application/json" \
@@ -150,6 +218,15 @@ curl -X POST "http://localhost:8080/v1/chat/completions" \
   }'
 ```
 
+#### List Models
+```bash
+# OpenAI-compatible format
+curl "http://localhost:8080/v1/models"
+
+# Legacy format
+curl "http://localhost:8080/models"
+```
+
 ### Python with OpenAI client
 
 ```python
@@ -160,6 +237,13 @@ client = OpenAI(
     api_key="your-api-key"  # Only needed if API_KEY is set
 )
 
+# List available models
+models = client.models.list()
+print("Available models:")
+for model in models.data:
+    print(f"- {model.id} (owned by {model.owned_by})")
+
+# Chat completion
 response = client.chat.completions.create(
     model="meta-llama/Llama-2-70b-chat-hf",
     messages=[
