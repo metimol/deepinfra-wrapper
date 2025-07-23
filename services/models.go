@@ -17,13 +17,33 @@ import (
 
 var (
 	supportedModels  []string
+	modelMetadata    map[string]ModelInfo
 	modelsMutex      sync.RWMutex
 	lastModelsUpdate time.Time
 	apiKey           string
 )
 
+// ModelInfo contains additional metadata about models
+type ModelInfo struct {
+	ID          string    `json:"id"`
+	Object      string    `json:"object"`
+	Created     int64     `json:"created"`
+	OwnedBy     string    `json:"owned_by"`
+	Description string    `json:"description,omitempty"`
+	MaxTokens   int       `json:"max_tokens,omitempty"`
+	Type        string    `json:"type,omitempty"`
+	Pricing     *Pricing  `json:"pricing,omitempty"`
+}
+
+type Pricing struct {
+	InputCost  float64 `json:"input_cost,omitempty"`
+	OutputCost float64 `json:"output_cost,omitempty"`
+	Unit       string  `json:"unit,omitempty"`
+}
+
 func InitAPIKey(key string) {
 	apiKey = key
+	modelMetadata = make(map[string]ModelInfo)
 }
 
 func GetAPIKey() string {
@@ -49,12 +69,43 @@ func GetSupportedModels() []string {
 	return models
 }
 
+// GetModelInfo returns detailed information about a specific model
+func GetModelInfo(modelID string) (ModelInfo, bool) {
+	modelsMutex.RLock()
+	defer modelsMutex.RUnlock()
+	
+	info, exists := modelMetadata[modelID]
+	return info, exists
+}
+
+// GetAllModelInfo returns detailed information about all models
+func GetAllModelInfo() []ModelInfo {
+	modelsMutex.RLock()
+	defer modelsMutex.RUnlock()
+	
+	var models []ModelInfo
+	for _, modelName := range supportedModels {
+		if info, exists := modelMetadata[modelName]; exists {
+			models = append(models, info)
+		} else {
+			// Fallback to basic info if detailed metadata is not available
+			models = append(models, ModelInfo{
+				ID:      modelName,
+				Object:  "model",
+				Created: time.Now().Unix(),
+				OwnedBy: "deepinfra",
+			})
+		}
+	}
+	return models
+}
+
 func UpdateSupportedModels() {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	fmt.Println("🧩 Fetching all available models...")
-	newModels, err := fetchSupportedModels(ctx)
+	newModels, modelInfo, err := fetchSupportedModels(ctx)
 	if err != nil {
 		fmt.Printf("❌ Error fetching supported models: %v\n", err)
 		return
@@ -63,19 +114,23 @@ func UpdateSupportedModels() {
 	if len(newModels) > 0 {
 		modelsMutex.Lock()
 		supportedModels = newModels
+		// Update model metadata
+		for id, info := range modelInfo {
+			modelMetadata[id] = info
+		}
 		lastModelsUpdate = time.Now()
 		modelsMutex.Unlock()
 	}
 }
 
-func fetchSupportedModels(ctx context.Context) ([]string, error) {
-	allModels, err := fetchAllModels(ctx)
+func fetchSupportedModels(ctx context.Context) ([]string, map[string]ModelInfo, error) {
+	allModels, modelInfo, err := fetchAllModels(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	
 	if len(allModels) == 0 {
-		return nil, fmt.Errorf("no models received from API")
+		return nil, nil, fmt.Errorf("no models received from API")
 	}
 	
 	fmt.Printf("🔍 Testing accessibility for %d models...\n", len(allModels))
@@ -109,12 +164,13 @@ func fetchSupportedModels(ctx context.Context) ([]string, error) {
 	}
 	
 	fmt.Printf("✅ Found %d accessible models out of %d total\n", len(accessibleModels), len(allModels))
-	return accessibleModels, nil
+	return accessibleModels, modelInfo, nil
 }
 
-func fetchAllModels(ctx context.Context) ([]string, error) {
+func fetchAllModels(ctx context.Context) ([]string, map[string]ModelInfo, error) {
 	var models []string
 	var lastError error
+	modelInfo := make(map[string]ModelInfo)
 	
 	for attempts := 0; attempts < MaxRetries; attempts++ {
 		proxy := GetWorkingProxy()
@@ -170,19 +226,51 @@ func fetchAllModels(ctx context.Context) ([]string, error) {
 			continue
 		}
 		
+		currentTime := time.Now().Unix()
 		for _, model := range modelResp.Data {
 			models = append(models, model.ID)
+			
+			// Create enhanced model info
+			modelInfo[model.ID] = ModelInfo{
+				ID:      model.ID,
+				Object:  "model",
+				Created: currentTime,
+				OwnedBy: "deepinfra",
+				Type:    inferModelType(model.ID),
+			}
 		}
 		
 		fmt.Printf("📋 Retrieved %d models from API\n", len(models))
-		return models, nil
+		return models, modelInfo, nil
 	}
 	
 	if lastError != nil {
-		return nil, fmt.Errorf("failed to fetch models after %d attempts: %v", MaxRetries, lastError)
+		return nil, nil, fmt.Errorf("failed to fetch models after %d attempts: %v", MaxRetries, lastError)
 	}
 	
-	return nil, fmt.Errorf("failed to fetch models after %d attempts", MaxRetries)
+	return nil, nil, fmt.Errorf("failed to fetch models after %d attempts", MaxRetries)
+}
+
+// inferModelType attempts to categorize models based on their names
+func inferModelType(modelID string) string {
+	modelLower := strings.ToLower(modelID)
+	
+	if strings.Contains(modelLower, "whisper") {
+		return "audio"
+	}
+	if strings.Contains(modelLower, "stable-diffusion") || strings.Contains(modelLower, "sdxl") || strings.Contains(modelLower, "dalle") {
+		return "image"
+	}
+	if strings.Contains(modelLower, "embedding") {
+		return "embedding"
+	}
+	if strings.Contains(modelLower, "llama") || strings.Contains(modelLower, "gpt") || strings.Contains(modelLower, "claude") || 
+	   strings.Contains(modelLower, "mistral") || strings.Contains(modelLower, "deepseek") || strings.Contains(modelLower, "qwen") {
+		return "text"
+	}
+	
+	// Default to text for most models
+	return "text"
 }
 
 func isModelAccessible(ctx context.Context, model string) bool {
