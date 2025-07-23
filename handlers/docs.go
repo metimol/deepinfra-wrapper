@@ -133,6 +133,27 @@ func OpenAPIHandler(w http.ResponseWriter, r *http.Request) {
                     },
                 },
             },
+            "/v1/models": map[string]interface{}{
+                "get": map[string]interface{}{
+                    "summary":     "List available models (OpenAI compatible)",
+                    "operationId": "listModelsV1",
+                    "responses": map[string]interface{}{
+                        "200": map[string]interface{}{
+                            "description": "Successful response",
+                            "content": map[string]interface{}{
+                                "application/json": map[string]interface{}{
+                                    "schema": map[string]interface{}{
+                                        "$ref": "#/components/schemas/OpenAIModelsResponse",
+                                    },
+                                },
+                            },
+                        },
+                        "405": map[string]interface{}{
+                            "description": "Method not allowed",
+                        },
+                    },
+                },
+            },
             "/models": map[string]interface{}{
                 "get": map[string]interface{}{
                     "summary":     "List available models",
@@ -209,6 +230,56 @@ func OpenAPIHandler(w http.ResponseWriter, r *http.Request) {
                         },
                         "content": map[string]interface{}{
                             "type": "string",
+                        },
+                    },
+                },
+                "OpenAIModel": map[string]interface{}{
+                    "type": "object",
+                    "required": []string{
+                        "id",
+                        "object",
+                        "created",
+                        "owned_by",
+                    },
+                    "properties": map[string]interface{}{
+                        "id": map[string]interface{}{
+                            "type": "string",
+                            "description": "The model identifier",
+                        },
+                        "object": map[string]interface{}{
+                            "type": "string",
+                            "description": "The object type, always 'model'",
+                            "example": "model",
+                        },
+                        "created": map[string]interface{}{
+                            "type": "integer",
+                            "format": "int64",
+                            "description": "The Unix timestamp when the model was created",
+                        },
+                        "owned_by": map[string]interface{}{
+                            "type": "string",
+                            "description": "The organization that owns the model",
+                        },
+                    },
+                },
+                "OpenAIModelsResponse": map[string]interface{}{
+                    "type": "object",
+                    "required": []string{
+                        "object",
+                        "data",
+                    },
+                    "properties": map[string]interface{}{
+                        "object": map[string]interface{}{
+                            "type": "string",
+                            "description": "The object type, always 'list'",
+                            "example": "list",
+                        },
+                        "data": map[string]interface{}{
+                            "type": "array",
+                            "description": "List of available models",
+                            "items": map[string]interface{}{
+                                "$ref": "#/components/schemas/OpenAIModel",
+                            },
                         },
                     },
                 },
