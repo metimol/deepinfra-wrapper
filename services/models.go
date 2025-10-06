@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -171,65 +170,51 @@ func fetchAllModels(ctx context.Context) ([]string, map[string]ModelInfo, error)
 	var models []string
 	var lastError error
 	modelInfo := make(map[string]ModelInfo)
-	
+
 	for attempts := 0; attempts < MaxRetries; attempts++ {
-		proxy := GetWorkingProxy()
-		if proxy == "" {
-			time.Sleep(time.Second)
-			continue
-		}
-		
-		fmt.Printf("🌐 Fetching model list using proxy: %s\n", proxy)
-		
-		proxyURL, err := url.Parse("http://" + proxy)
-		if err != nil {
-			RemoveProxy(proxy)
-			lastError = err
-			continue
-		}
-		
+		fmt.Println("🌐 Fetching model list directly...")
+
 		client := &http.Client{
-			Transport: &http.Transport{
-				Proxy: http.ProxyURL(proxyURL),
-			},
 			Timeout: 30 * time.Second,
 		}
-		
+
 		req, err := http.NewRequestWithContext(ctx, "GET", DeepInfraBaseURL+ModelsEndpoint, nil)
 		if err != nil {
 			lastError = err
+			time.Sleep(1 * time.Second)
 			continue
 		}
-		
+
 		req.Header = getHeaders()
-		
+
 		resp, err := client.Do(req)
 		if err != nil {
-			RemoveProxy(proxy)
 			lastError = err
+			time.Sleep(1 * time.Second)
 			continue
 		}
-		
+
 		if resp.StatusCode != http.StatusOK {
 			resp.Body.Close()
-			RemoveProxy(proxy)
 			lastError = fmt.Errorf("failed to get models list: status %d", resp.StatusCode)
+			time.Sleep(1 * time.Second)
 			continue
 		}
-		
+
 		var modelResp types.ModelResponse
 		err = json.NewDecoder(resp.Body).Decode(&modelResp)
 		resp.Body.Close()
-		
+
 		if err != nil {
 			lastError = err
+			time.Sleep(1 * time.Second)
 			continue
 		}
-		
+
 		currentTime := time.Now().Unix()
 		for _, model := range modelResp.Data {
 			models = append(models, model.ID)
-			
+
 			// Create enhanced model info
 			modelInfo[model.ID] = ModelInfo{
 				ID:      model.ID,
@@ -239,15 +224,15 @@ func fetchAllModels(ctx context.Context) ([]string, map[string]ModelInfo, error)
 				Type:    inferModelType(model.ID),
 			}
 		}
-		
+
 		fmt.Printf("📋 Retrieved %d models from API\n", len(models))
 		return models, modelInfo, nil
 	}
-	
+
 	if lastError != nil {
 		return nil, nil, fmt.Errorf("failed to fetch models after %d attempts: %v", MaxRetries, lastError)
 	}
-	
+
 	return nil, nil, fmt.Errorf("failed to fetch models after %d attempts", MaxRetries)
 }
 
@@ -275,25 +260,10 @@ func inferModelType(modelID string) string {
 
 func isModelAccessible(ctx context.Context, model string) bool {
 	for attempts := 0; attempts < 2; attempts++ {
-		proxy := GetWorkingProxy()
-		if proxy == "" {
-			time.Sleep(time.Second)
-			continue
-		}
-		
-		proxyURL, err := url.Parse("http://" + proxy)
-		if err != nil {
-			RemoveProxy(proxy)
-			continue
-		}
-		
 		client := &http.Client{
-			Transport: &http.Transport{
-				Proxy: http.ProxyURL(proxyURL),
-			},
 			Timeout: 20 * time.Second,
 		}
-		
+
 		chatReq := types.ChatCompletionRequest{
 			Model: model,
 			Messages: []types.ChatMessage{
@@ -304,35 +274,37 @@ func isModelAccessible(ctx context.Context, model string) bool {
 			},
 			MaxTokens: 10,
 		}
-		
+
 		data, err := json.Marshal(chatReq)
 		if err != nil {
 			continue
 		}
-		
+
 		req, err := http.NewRequestWithContext(ctx, "POST", DeepInfraBaseURL+ChatEndpoint, bytes.NewBuffer(data))
 		if err != nil {
 			continue
 		}
-		
+
 		req.Header = getHeaders()
-		
+
 		resp, err := client.Do(req)
 		if err != nil {
-			RemoveProxy(proxy)
+			// Don't remove proxy, just log error and retry
+			fmt.Printf("Error checking model accessibility for %s: %v\n", model, err)
+			time.Sleep(1 * time.Second)
 			continue
 		}
-		
+
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		
+
 		if strings.Contains(string(body), "Not authenticated") {
 			return false
 		}
-		
+
 		return resp.StatusCode == http.StatusOK
 	}
-	
+
 	return false
 }
 
