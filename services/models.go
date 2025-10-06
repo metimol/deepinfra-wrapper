@@ -127,41 +127,26 @@ func fetchSupportedModels(ctx context.Context) ([]string, map[string]ModelInfo, 
 	if err != nil {
 		return nil, nil, err
 	}
-	
+
 	if len(allModels) == 0 {
 		return nil, nil, fmt.Errorf("no models received from API")
 	}
-	
+
 	fmt.Printf("🔍 Testing accessibility for %d models...\n", len(allModels))
-	
-	var wg sync.WaitGroup
-	results := make(chan string, len(allModels))
-	semaphore := make(chan struct{}, 10)
-	
-	for _, model := range allModels {
-		wg.Add(1)
-		go func(m string) {
-			defer wg.Done()
-			semaphore <- struct{}{}
-			defer func() { <-semaphore }()
-			
-			if isModelAccessible(ctx, m) {
-				fmt.Printf("✅ Model accessible: %s\n", m)
-				results <- m
-			}
-		}(model)
-	}
-	
-	go func() {
-		wg.Wait()
-		close(results)
-	}()
-	
+
 	var accessibleModels []string
-	for model := range results {
-		accessibleModels = append(accessibleModels, model)
+	for i, model := range allModels {
+		fmt.Printf("Checking model %d/%d: %s\n", i+1, len(allModels), model)
+		if isModelAccessible(ctx, model) {
+			fmt.Printf("✅ Model accessible: %s\n", model)
+			accessibleModels = append(accessibleModels, model)
+		} else {
+			fmt.Printf("❌ Model not accessible: %s\n", model)
+		}
+		// Add a 1.5-second delay between checks
+		time.Sleep(1500 * time.Millisecond)
 	}
-	
+
 	fmt.Printf("✅ Found %d accessible models out of %d total\n", len(accessibleModels), len(allModels))
 	return accessibleModels, modelInfo, nil
 }
